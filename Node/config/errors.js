@@ -8,20 +8,24 @@ module.exports = {
     'status': 1
   },
   'missingDocumentOrWorkspaceError': {
-    'msg': 'You must specify a -d (documentId) and -w (workspaceId).',
-    'status': 1
+    'message': 'Either the document or workspace ID is missing from the arguments.',
+    'code': 2
   },
   'missingDWEError': {
     'msg': 'You must specify a -d (documentId), -w (workspaceId), and -e (elementId).',
     'status': 1
   },
   'missingMimeType': {
-    'msg': 'You must specify a -t (MIME type)',
-    'status': 1
+    'message': 'The MIME type is missing from the arguments.',
+    'code': 3
   },
   'missingFile': {
-    'msg': 'Yom must specify a -f (file)',
-    'status': 1
+    'message': 'The file path is missing from the arguments.',
+    'code': 4
+  },
+  'missingDirectory': {
+    'message': 'The directory path is missing from the arguments.',
+    'code': 5
   },
   'credentialsFileError': {
     'msg': 'You must provide an API key file named config/apikey.js; please see config/apikeyexample.js for an example.',

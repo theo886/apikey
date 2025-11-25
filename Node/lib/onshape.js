@@ -1,7 +1,6 @@
 var util = require('./util.js');
 var errors = require('../config/errors.js');
 var crypto = require('crypto');
-var url = require('url');
 var querystring = require('querystring');
 var fs = require('fs');
 var pathModule = require('path');
@@ -132,7 +131,7 @@ module.exports = (function (creds) {
     var inputHeaders = inputHeadersFromOpts(opts);
     var headers = buildHeaders('GET', path, queryString, inputHeaders);
     if (queryString !== '') queryString = '?' + queryString;
-    var requestOpts = url.parse(baseUrl + path + queryString);
+    var requestOpts = new URL(baseUrl + path + queryString);
     requestOpts.method = 'GET';
     requestOpts.headers = headers;
     var req = protocol.request(requestOpts, function (res) {
@@ -144,14 +143,14 @@ module.exports = (function (creds) {
         if (res.statusCode === 200) {
           cb(wholeData);
         } else if (res.statusCode === 307) {
-          var redirectParsedUrl = url.parse(res.headers.location);
+          var redirectParsedUrl = new URL(res.headers.location);
           console.log('Redirecting to ' + res.headers.location);
           // the redirect contains a query string, which the API key mechanism needs to encrypt
           var redirectOpts = {
             baseUrl: redirectParsedUrl.protocol + '//' + redirectParsedUrl.host,
             path: redirectParsedUrl.pathname,
             headers: inputHeaders,
-            query: querystring.parse(redirectParsedUrl.query)
+            query: querystring.parse(redirectParsedUrl.search.substring(1))
           };
           get(redirectOpts, cb);
         } else {
@@ -195,8 +194,10 @@ module.exports = (function (creds) {
       path = buildDWMVEPath(opts);
     }
     var baseUrl = ('baseUrl' in opts) ? opts.baseUrl : creds.baseUrl;
-    var headers = buildHeaders('POST', path, '', inputHeadersFromOpts(opts));
-    var requestOpts = url.parse(baseUrl + path);
+    var queryString = buildQueryString(opts);
+    var headers = buildHeaders('POST', path, queryString, inputHeadersFromOpts(opts));
+    if (queryString !== '') queryString = '?' + queryString;
+    var requestOpts = new URL(baseUrl + path + queryString);
     requestOpts.method = 'POST';
     requestOpts.headers = headers;
     var req = protocol.request(requestOpts, function (res) {
@@ -214,7 +215,10 @@ module.exports = (function (creds) {
           if (wholeData) {
             console.log(wholeData.toString());
           }
-          util.error(errors.notOKError);
+          cb(null, {
+            statusCode: res.statusCode,
+            body: wholeData.toString()
+          });
         }
       });
     }).on('error', function (e) {
@@ -233,7 +237,9 @@ module.exports = (function (creds) {
   /*
    * opts: {
    *   d: document ID
-   *   w: workspace ID
+   *   w: workspace ID (only one of w, v, m)
+   *   v: version ID (only one of w, v, m)
+   *   m: microversion ID (only one of w, v, m)
    *   e: elementId
    *   baseUrl: base URL; if present, overrides apikey.js
    *   resource: top-level resource (partstudios)
@@ -251,7 +257,7 @@ module.exports = (function (creds) {
     }
     var baseUrl = ('baseUrl' in opts) ? opts.baseUrl : creds.baseUrl;
     var headers = buildHeaders('DELETE', path, '', inputHeadersFromOpts(opts));
-    var requestOpts = url.parse(baseUrl + path);
+    var requestOpts = new URL(baseUrl + path);
     requestOpts.method = 'DELETE';
     requestOpts.headers = headers;
     var req = protocol.request(requestOpts, function (res) {
@@ -277,6 +283,53 @@ module.exports = (function (creds) {
       util.error(errors.deleteError);
     });
     req.end();
+  };
+
+  /*
+   * opts: {
+   *   name: name of document
+   *   isPublic: boolean, true for public, false for private
+   * }
+   */
+  var createDocument = function (opts, cb) {
+    opts.path = '/api/documents';
+    // isPublic being false is the default, so we only need to handle it being true
+    opts.body = {
+      name: opts.name
+    };
+    if (opts.isPublic) {
+      opts.body.isPublic = true;
+    }
+    if (opts.parentId) {
+      opts.body.parentId = opts.parentId;
+    }
+    post(opts, cb);
+  };
+
+  var getCompany = function (cb) {
+      opts = {};
+      opts.path = '/api/v10/companies';
+      get(opts, cb);
+  }
+
+  var getCompanyPolicies = function (opts, cb) {
+      opts.path = '/api/v10/companies/' + opts.cid + '/policies';
+      get(opts, cb);
+  }
+
+  var createReleasePackage = function (opts, cb) {
+    opts.path = '/api/v10/releasepackages';
+    post(opts, cb);
+  };
+
+  var submitReleasePackage = function (opts, cb) {
+    opts.path = '/api/v10/releasepackages/' + opts.rpid + '/submit';
+    opts.body = ('body' in opts) ? opts.body : {};
+    post(opts, cb);
+  };
+
+  var moveDocumentToFolder = function (opts, cb) {
+    opts.path = `/api/globaltreenodes/folder/${opts.folderId}`;
   };
 
   /*
@@ -310,7 +363,7 @@ module.exports = (function (creds) {
     var boundaryKey = Math.random().toString(16); // random string for boundary
     inputHeaders['Content-Type'] = 'multipart/form-data; boundary="' + boundaryKey + '"';
     var headers = buildHeaders('POST', path, '', inputHeaders);
-    var requestOpts = url.parse(baseUrl + path);
+    var requestOpts = new URL(baseUrl + path);
     requestOpts.method = 'POST';
     requestOpts.headers = headers;
 
@@ -370,6 +423,12 @@ module.exports = (function (creds) {
     get: get,
     post: post,
     delete: del,
-    upload: upload
+    upload: upload,
+    getCompany: getCompany,
+    getCompanyPolicies: getCompanyPolicies,
+    createDocument: createDocument,
+    createReleasePackage: createReleasePackage,
+    submitReleasePackage: submitReleasePackage,
+    moveDocumentToFolder: moveDocumentToFolder
   };
 })(apikey);
