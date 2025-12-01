@@ -1,0 +1,177 @@
+# Claude Agent Workflow - Long-Running Agent Harness
+# Based on: https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents
+#
+# This workflow implements a two-part agent system:
+# 1. Initializer Agent - Sets up environment and creates progress tracking
+# 2. Coding Agent - Works on features and maintains detailed handoff records
+
+name: Claude Agent Workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_description:
+        description: 'Task description for the agent'
+        required: true
+        type: string
+      mode:
+        description: 'Agent mode: init (new task) or continue (resume work)'
+        required: true
+        default: 'init'
+        type: choice
+        options:
+          - init
+          - continue
+      max_iterations:
+        description: 'Maximum number of context windows (iterations)'
+        required: false
+        default: '5'
+        type: string
+
+  issue_comment:
+    types: [created]
+
+env:
+  PROGRESS_FILE: claude-progress.txt
+
+jobs:
+  # Determine if this is an init or continue run
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.determine-mode.outputs.mode }}
+      task: ${{ steps.determine-mode.outputs.task }}
+    steps:
+      - name: Determine mode
+        id: determine-mode
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "mode=${{ inputs.mode }}" >> $GITHUB_OUTPUT
+            echo "task=${{ inputs.task_description }}" >> $GITHUB_OUTPUT
+          else
+            # For issue comments, check if progress file exists to determine mode
+            echo "mode=continue" >> $GITHUB_OUTPUT
+            echo "task=${{ github.event.comment.body }}" >> $GITHUB_OUTPUT
+          fi
+
+  # Initializer Agent: Sets up the project for a new task
+  initializer:
+    needs: setup
+    if: needs.setup.outputs.mode == 'init'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'Node/package-lock.json'
+
+      - name: Install dependencies
+        working-directory: Node
+        run: npm ci
+
+      - name: Initialize progress file
+        run: |
+          cat > ${{ env.PROGRESS_FILE }} << 'EOF'
+          # Claude Agent Progress Tracker
+
+          ## Task Description
+          ${{ needs.setup.outputs.task }}
+
+          ## Status: INITIALIZING
+          Started: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          ## Context Window: 1
+
+          ### Current State
+          - [ ] Task analysis complete
+          - [ ] Implementation plan created
+          - [ ] Environment verified
+
+          ### Completed Steps
+          (None yet)
+
+          ### Next Steps
+          1. Analyze the task requirements
+          2. Create implementation plan
+          3. Begin implementation
+
+          ### Blockers
+          (None)
+
+          ### Notes for Next Session
+          This is a fresh start. Review the task description above and begin work.
+
+          ---
+          ## Session History
+
+          ### Session 1 (Initializer)
+          - Started: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          - Status: In Progress
+          EOF
+
+      - name: Commit progress file
+        run: |
+          git config user.name "Claude Agent"
+          git config user.email "claude-agent@anthropic.com"
+          git add ${{ env.PROGRESS_FILE }}
+          git commit -m "Initialize agent progress tracking for: ${{ needs.setup.outputs.task }}" || echo "No changes to commit"
+          git push
+
+  # Coding Agent: Continues work on the task
+  coding-agent:
+    needs: setup
+    if: needs.setup.outputs.mode == 'continue'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'Node/package-lock.json'
+
+      - name: Install dependencies
+        working-directory: Node
+        run: npm ci
+
+      - name: Read current progress
+        id: read-progress
+        run: |
+          if [[ -f "${{ env.PROGRESS_FILE }}" ]]; then
+            echo "Progress file found"
+            cat ${{ env.PROGRESS_FILE }}
+          else
+            echo "No progress file found - creating new one"
+            echo "## Status: NEW SESSION" > ${{ env.PROGRESS_FILE }}
+          fi
+
+      - name: Update session info
+        run: |
+          # Increment context window counter and add session entry
+          CURRENT_WINDOW=$(grep -oP 'Context Window: \K\d+' ${{ env.PROGRESS_FILE }} || echo "0")
+          NEW_WINDOW=$((CURRENT_WINDOW + 1))
+
+          # Add new session entry
+          cat >> ${{ env.PROGRESS_FILE }} << EOF
+
+          ### Session $NEW_WINDOW (Coding Agent)
+          - Started: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          - Additional Context: ${{ needs.setup.outputs.task }}
+          - Status: In Progress
+          EOF
+
+      - name: Commit updated progress
+        run: |
+          git config user.name "Claude Agent"
+          git config user.email "claude-agent@anthropic.com"
+          git add -A
+          git commit -m "Update progress - Session continuation" || echo "No changes to commit"
+          git push

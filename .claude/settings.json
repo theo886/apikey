@@ -1,0 +1,19 @@
+{
+  "project": {
+    "name": "Onshape API Key Samples",
+    "description": "Node.js sample applications for Onshape API key authentication"
+  },
+  "agent": {
+    "progressFile": "claude-progress.txt",
+    "contextFile": "CLAUDE.md"
+  },
+  "workflow": {
+    "description": "Long-running agent harness based on Anthropic's recommended pattern",
+    "reference": "https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents",
+    "commands": {
+      "init": "Start a new task with the initializer agent",
+      "continue": "Resume work with the coding agent",
+      "status": "Check current task status"
+    }
+  }
+}

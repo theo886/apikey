@@ -1,0 +1,41 @@
+# Claude Agent Progress Tracker
+
+This file tracks the state of long-running agent work across multiple context windows.
+It serves as the "memory bridge" between sessions, following the pattern described in:
+https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents
+
+## Current Task
+(No active task)
+
+## Status: IDLE
+Last Updated: (Not started)
+
+## Context Window: 0
+
+### Current State
+- Project is ready for agent work
+- No active tasks in progress
+
+### Completed Steps
+(None)
+
+### Next Steps
+1. Wait for a new task to be assigned
+
+### Blockers
+(None)
+
+### Notes for Next Session
+This is a template file. When starting a new task:
+1. Update the "Current Task" section with the task description
+2. Change status to "IN_PROGRESS"
+3. Increment the context window counter
+4. Document your progress in "Completed Steps"
+5. Update "Next Steps" with remaining work
+6. Add any issues to "Blockers"
+7. Write helpful notes for the next session/context window
+
+---
+## Session History
+
+(No sessions yet)
