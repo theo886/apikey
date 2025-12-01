@@ -1,0 +1,247 @@
+' ===========================================
+' Batch Pack and Go Macro
+' Processes multiple assemblies from a CSV file
+' ===========================================
+' Preconditions:
+' 1. Create input CSV file with assembly paths (one per line)
+' 2. Output folder exists
+'
+' Input CSV format (no header):
+' C:\Engineering\Production\10,000\10,000-10,999\10121-01.SLDASM
+' C:\Engineering\Production\10,000\10,000-10,999\10122-01.SLDASM
+' ...
+
+Option Explicit
+
+' ============ CONFIGURATION ============
+Const INPUT_CSV = "C:\Temp\assemblies_to_pack.csv"
+Const OUTPUT_FOLDER = "C:\Temp\PackAndGo\"
+Const LOG_FOLDER = "C:\Temp\"
+Const INCLUDE_DRAWINGS = False
+Const FLATTEN_FOLDERS = True
+' =======================================
+
+Dim swApp As SldWorks.SldWorks
+Dim swModelDoc As SldWorks.ModelDoc2
+Dim swModelDocExt As SldWorks.ModelDocExtension
+Dim swPackAndGo As SldWorks.PackAndGo
+Dim fso As Object
+Dim logStream As Object
+
+Dim totalFiles As Long
+Dim successCount As Long
+Dim failCount As Long
+
+Sub main()
+    Dim inputFile As Object
+    Dim line As String
+    Dim assemblyPath As String
+    Dim outputZip As String
+    Dim fileName As String
+    Dim startTime As Date
+
+    startTime = Now
+
+    Set swApp = Application.SldWorks
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    ' Run in background - hide SolidWorks UI
+    swApp.Visible = False
+    swApp.UserControl = False
+    swApp.CommandInProgress = True
+
+    ' Create output folder if needed
+    If Not fso.FolderExists(OUTPUT_FOLDER) Then
+        fso.CreateFolder OUTPUT_FOLDER
+    End If
+
+    ' Open log file with timestamp to avoid conflicts
+    Dim logFile As String
+    logFile = LOG_FOLDER & "packandgo_" & Format(Now, "yyyymmdd_hhmmss") & ".txt"
+    Set logStream = fso.CreateTextFile(logFile, True)
+    LogMsg "=========================================="
+    LogMsg "Batch Pack and Go - Started " & Now
+    LogMsg "=========================================="
+    LogMsg "Input: " & INPUT_CSV
+    LogMsg "Output: " & OUTPUT_FOLDER
+    LogMsg "Log: " & logFile
+    LogMsg ""
+
+    ' Check input file exists
+    If Not fso.FileExists(INPUT_CSV) Then
+        MsgBox "Input file not found: " & INPUT_CSV, vbCritical
+        Exit Sub
+    End If
+
+    ' Count total files
+    Set inputFile = fso.OpenTextFile(INPUT_CSV, 1)
+    Do While Not inputFile.AtEndOfStream
+        line = Trim(inputFile.ReadLine)
+        If Len(line) > 0 Then totalFiles = totalFiles + 1
+    Loop
+    inputFile.Close
+
+    LogMsg "Total assemblies to process: " & totalFiles
+    LogMsg ""
+
+    ' Process each assembly
+    Set inputFile = fso.OpenTextFile(INPUT_CSV, 1)
+    Dim currentIndex As Long
+    currentIndex = 0
+
+    Do While Not inputFile.AtEndOfStream
+        line = Trim(inputFile.ReadLine)
+        If Len(line) > 0 Then
+            currentIndex = currentIndex + 1
+            assemblyPath = line
+
+            ' Extract filename for output
+            fileName = fso.GetBaseName(assemblyPath)
+            outputZip = OUTPUT_FOLDER & fileName & ".zip"
+
+            ' Skip if already processed
+            If fso.FileExists(outputZip) Then
+                LogMsg "[" & currentIndex & "/" & totalFiles & "] SKIP (exists): " & fileName
+                successCount = successCount + 1
+            Else
+                LogMsg "[" & currentIndex & "/" & totalFiles & "] Processing: " & fileName
+
+                If ProcessAssembly(assemblyPath, outputZip) Then
+                    successCount = successCount + 1
+                    LogMsg "    SUCCESS: " & outputZip
+                Else
+                    failCount = failCount + 1
+                    LogMsg "    FAILED"
+                End If
+            End If
+        End If
+    Loop
+    inputFile.Close
+
+    ' Summary
+    Dim elapsed As String
+    elapsed = Format(Now - startTime, "hh:mm:ss")
+
+    LogMsg ""
+    LogMsg "=========================================="
+    LogMsg "COMPLETE"
+    LogMsg "=========================================="
+    LogMsg "Total: " & totalFiles
+    LogMsg "Success: " & successCount
+    LogMsg "Failed: " & failCount
+    LogMsg "Elapsed: " & elapsed
+    LogMsg ""
+
+    logStream.Close
+
+    ' Restore SolidWorks visibility
+    swApp.Visible = True
+    swApp.UserControl = True
+    swApp.CommandInProgress = False
+
+    MsgBox "Batch Pack and Go Complete!" & vbCrLf & vbCrLf & _
+           "Success: " & successCount & vbCrLf & _
+           "Failed: " & failCount & vbCrLf & _
+           "Elapsed: " & elapsed & vbCrLf & vbCrLf & _
+           "Log: " & logFile, vbInformation
+End Sub
+
+Function ProcessAssembly(assemblyPath As String, outputZip As String) As Boolean
+    On Error GoTo ErrorHandler
+
+    Dim errors As Long
+    Dim warnings As Long
+    Dim status As Boolean
+    Dim statuses As Variant
+    Dim pgFileNames As Variant
+    Dim namesCount As Long
+    Dim swAssembly As SldWorks.AssemblyDoc
+    Dim resolveErrors As Long
+
+    ProcessAssembly = False
+
+    ' Check file exists
+    If Not fso.FileExists(assemblyPath) Then
+        LogMsg "    ERROR: File not found"
+        Exit Function
+    End If
+
+    ' Open assembly with option to auto-resolve references
+    ' swOpenDocOptions_LoadModel = 2 (load fully, not lightweight)
+    Set swModelDoc = swApp.OpenDoc6(assemblyPath, 2, 2, "", errors, warnings)
+
+    If swModelDoc Is Nothing Then
+        LogMsg "    ERROR: Could not open (error " & errors & ")"
+        Exit Function
+    End If
+
+    Set swModelDocExt = swModelDoc.Extension
+    Set swAssembly = swModelDoc
+
+    ' Resolve references
+    LogMsg "    Resolving references..."
+
+    ' Resolve all lightweight components to fully loaded
+    resolveErrors = swAssembly.ResolveAllLightWeightComponents(True)
+    If resolveErrors > 0 Then
+        LogMsg "    Warning: " & resolveErrors & " components could not be resolved"
+    End If
+
+    ' Force rebuild to ensure all references are current
+    swModelDoc.ForceRebuild3 False
+
+    ' Get Pack and Go
+    Set swPackAndGo = swModelDocExt.GetPackAndGo
+
+    If swPackAndGo Is Nothing Then
+        LogMsg "    ERROR: Could not get Pack and Go interface"
+        CloseDoc
+        Exit Function
+    End If
+
+    ' Configure
+    swPackAndGo.IncludeDrawings = INCLUDE_DRAWINGS
+    swPackAndGo.IncludeSimulationResults = False
+    swPackAndGo.IncludeToolboxComponents = True
+    swPackAndGo.FlattenToSingleFolder = FLATTEN_FOLDERS
+
+    ' Get file count
+    namesCount = swPackAndGo.GetDocumentNamesCount
+    LogMsg "    Files in assembly: " & namesCount
+
+    ' Set output
+    status = swPackAndGo.SetSaveToName(True, outputZip)
+
+    ' Execute
+    statuses = swModelDocExt.SavePackAndGo(swPackAndGo)
+
+    ' Close document
+    CloseDoc
+
+    ' Check result
+    If fso.FileExists(outputZip) Then
+        ProcessAssembly = True
+    End If
+
+    Exit Function
+
+ErrorHandler:
+    LogMsg "    ERROR: " & Err.Description
+    CloseDoc
+    ProcessAssembly = False
+End Function
+
+Sub CloseDoc()
+    On Error Resume Next
+    If Not swModelDoc Is Nothing Then
+        swApp.CloseDoc swModelDoc.GetTitle
+        Set swModelDoc = Nothing
+    End If
+End Sub
+
+Sub LogMsg(msg As String)
+    Debug.Print msg
+    If Not logStream Is Nothing Then
+        logStream.WriteLine msg
+    End If
+End Sub

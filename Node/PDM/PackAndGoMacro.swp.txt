@@ -1,0 +1,86 @@
+' ===========================================
+' SolidWorks Pack and Go Macro
+' Based on official SOLIDWORKS 2024 API example
+' ===========================================
+' Preconditions:
+' 1. Assembly is open in SolidWorks
+' 2. C:\Temp folder exists
+'
+' To use:
+' 1. In SolidWorks: Tools -> Macro -> New
+' 2. Copy/paste this code
+' 3. Save as PackAndGoMacro.swp
+' 4. Run (F5)
+
+Option Explicit
+
+Dim swApp As SldWorks.SldWorks
+Dim swModelDoc As SldWorks.ModelDoc2
+Dim swModelDocExt As SldWorks.ModelDocExtension
+Dim swPackAndGo As SldWorks.PackAndGo
+Dim pgFileNames As Variant
+Dim pgFileStatus As Variant
+Dim status As Boolean
+Dim i As Long
+Dim namesCount As Long
+Dim myPath As String
+Dim statuses As Variant
+Dim outputZip As String
+
+Sub main()
+
+    Set swApp = Application.SldWorks
+    Set swModelDoc = swApp.ActiveDoc
+
+    If swModelDoc Is Nothing Then
+        MsgBox "No document open! Please open an assembly first.", vbCritical
+        Exit Sub
+    End If
+
+    Set swModelDocExt = swModelDoc.Extension
+
+    ' Get Pack and Go object
+    Debug.Print "Pack and Go"
+    Set swPackAndGo = swModelDocExt.GetPackAndGo
+
+    ' Get number of documents in assembly
+    namesCount = swPackAndGo.GetDocumentNamesCount
+    Debug.Print "  Number of documents: " & namesCount
+
+    ' Configure options
+    swPackAndGo.IncludeDrawings = False
+    swPackAndGo.IncludeSimulationResults = False
+    swPackAndGo.IncludeToolboxComponents = True
+
+    ' Get current paths and filenames
+    status = swPackAndGo.GetDocumentNames(pgFileNames)
+    Debug.Print ""
+    Debug.Print "  Files to pack:"
+    If (Not (IsEmpty(pgFileNames))) Then
+        For i = 0 To UBound(pgFileNames)
+            Debug.Print "    " & pgFileNames(i)
+        Next i
+    End If
+
+    ' Set output folder and flatten structure
+    myPath = "C:\Temp\"
+    outputZip = myPath & swModelDoc.GetTitle & ".zip"
+    status = swPackAndGo.SetSaveToName(True, outputZip)
+    swPackAndGo.FlattenToSingleFolder = True
+
+    Debug.Print ""
+    Debug.Print "  Output: " & outputZip
+
+    ' Execute Pack and Go
+    Debug.Print ""
+    Debug.Print "  Saving Pack and Go..."
+    statuses = swModelDocExt.SavePackAndGo(swPackAndGo)
+
+    ' Check result
+    If IsArray(statuses) Then
+        MsgBox "Pack and Go complete!" & vbCrLf & vbCrLf & "Saved to: " & outputZip, vbInformation
+    Else
+        MsgBox "Pack and Go may have failed. Check C:\Temp for output.", vbExclamation
+    End If
+
+End Sub
