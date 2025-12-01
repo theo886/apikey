@@ -1,0 +1,259 @@
+' ===========================================
+' Batch Update References Macro
+' Updates external references for all assemblies in CSV
+' ===========================================
+' Preconditions:
+' 1. Create input CSV file with assembly paths (one per line)
+' 2. All referenced files should be accessible
+'
+' This is equivalent to running "Update References" in PDM
+' on each assembly to fix broken/moved file paths.
+
+Option Explicit
+
+' ============ CONFIGURATION ============
+Const INPUT_CSV = "C:\Temp\assemblies_to_update.csv"
+Const LOG_FOLDER = "C:\Temp\"
+Const SEARCH_FOLDER = "C:\Engineering"    ' Root folder to search for missing files
+Const SAVE_AFTER_UPDATE = True            ' Save assembly after updating references
+' =======================================
+
+Dim swApp As SldWorks.SldWorks
+Dim swModelDoc As SldWorks.ModelDoc2
+Dim fso As Object
+Dim logStream As Object
+
+Dim totalFiles As Long
+Dim successCount As Long
+Dim failCount As Long
+
+Sub main()
+    Dim inputFile As Object
+    Dim line As String
+    Dim assemblyPath As String
+    Dim startTime As Date
+    Dim fileName As String
+
+    startTime = Now
+
+    Set swApp = Application.SldWorks
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    ' Run in background
+    swApp.Visible = False
+    swApp.UserControl = False
+    swApp.CommandInProgress = True
+
+    ' Open log file with timestamp to avoid conflicts
+    Dim logFile As String
+    logFile = LOG_FOLDER & "update_refs_" & Format(Now, "yyyymmdd_hhmmss") & ".txt"
+    Set logStream = fso.CreateTextFile(logFile, True)
+    LogMsg "=========================================="
+    LogMsg "Batch Update References - Started " & Now
+    LogMsg "=========================================="
+    LogMsg "Input: " & INPUT_CSV
+    LogMsg "Search folder: " & SEARCH_FOLDER
+    LogMsg "Log: " & logFile
+    LogMsg ""
+
+    ' Check input file exists
+    If Not fso.FileExists(INPUT_CSV) Then
+        MsgBox "Input file not found: " & INPUT_CSV, vbCritical
+        Exit Sub
+    End If
+
+    ' Add search folder to SolidWorks search paths
+    AddSearchFolder SEARCH_FOLDER
+
+    ' Count total files
+    Set inputFile = fso.OpenTextFile(INPUT_CSV, 1)
+    Do While Not inputFile.AtEndOfStream
+        line = Trim(inputFile.ReadLine)
+        If Len(line) > 0 Then totalFiles = totalFiles + 1
+    Loop
+    inputFile.Close
+
+    LogMsg "Total assemblies to process: " & totalFiles
+    LogMsg ""
+
+    ' Process each assembly
+    Set inputFile = fso.OpenTextFile(INPUT_CSV, 1)
+    Dim currentIndex As Long
+    currentIndex = 0
+
+    Do While Not inputFile.AtEndOfStream
+        line = Trim(inputFile.ReadLine)
+        If Len(line) > 0 Then
+            currentIndex = currentIndex + 1
+            assemblyPath = line
+            fileName = fso.GetBaseName(assemblyPath)
+
+            LogMsg "[" & currentIndex & "/" & totalFiles & "] Processing: " & fileName
+
+            If UpdateAssemblyReferences(assemblyPath) Then
+                successCount = successCount + 1
+                LogMsg "    SUCCESS"
+            Else
+                failCount = failCount + 1
+                LogMsg "    FAILED"
+            End If
+        End If
+    Loop
+    inputFile.Close
+
+    ' Summary
+    Dim elapsed As String
+    elapsed = Format(Now - startTime, "hh:mm:ss")
+
+    LogMsg ""
+    LogMsg "=========================================="
+    LogMsg "COMPLETE"
+    LogMsg "=========================================="
+    LogMsg "Total: " & totalFiles
+    LogMsg "Success: " & successCount
+    LogMsg "Failed: " & failCount
+    LogMsg "Elapsed: " & elapsed
+    LogMsg ""
+
+    logStream.Close
+
+    ' Restore SolidWorks visibility
+    swApp.Visible = True
+    swApp.UserControl = True
+    swApp.CommandInProgress = False
+
+    MsgBox "Batch Update References Complete!" & vbCrLf & vbCrLf & _
+           "Success: " & successCount & vbCrLf & _
+           "Failed: " & failCount & vbCrLf & _
+           "Elapsed: " & elapsed & vbCrLf & vbCrLf & _
+           "Log: " & logFile, vbInformation
+End Sub
+
+Function UpdateAssemblyReferences(assemblyPath As String) As Boolean
+    On Error GoTo ErrorHandler
+
+    Dim errors As Long
+    Dim warnings As Long
+    Dim swAssembly As SldWorks.AssemblyDoc
+    Dim swComp As SldWorks.Component2
+    Dim vComps As Variant
+    Dim i As Long
+    Dim updatedCount As Long
+    Dim resolveErrors As Long
+
+    UpdateAssemblyReferences = False
+
+    ' Check file exists
+    If Not fso.FileExists(assemblyPath) Then
+        LogMsg "    ERROR: File not found"
+        Exit Function
+    End If
+
+    ' Open assembly - swOpenDocOptions_Silent = 1, swOpenDocOptions_LoadModel = 2
+    ' Combined = 3 for silent + full load
+    Set swModelDoc = swApp.OpenDoc6(assemblyPath, 2, 3, "", errors, warnings)
+
+    If swModelDoc Is Nothing Then
+        LogMsg "    ERROR: Could not open (error " & errors & ")"
+        Exit Function
+    End If
+
+    Set swAssembly = swModelDoc
+
+    ' Resolve all lightweight components first
+    LogMsg "    Resolving lightweight components..."
+    resolveErrors = swAssembly.ResolveAllLightWeightComponents(True)
+    If resolveErrors > 0 Then
+        LogMsg "    Warning: " & resolveErrors & " components could not be resolved"
+    End If
+
+    ' Get all components
+    vComps = swAssembly.GetComponents(False)  ' False = include sub-assembly components
+
+    If IsEmpty(vComps) Then
+        LogMsg "    No components found"
+        CloseDoc False
+        UpdateAssemblyReferences = True
+        Exit Function
+    End If
+
+    LogMsg "    Components: " & UBound(vComps) + 1
+
+    ' Update references for each component
+    updatedCount = 0
+    For i = 0 To UBound(vComps)
+        Set swComp = vComps(i)
+        If Not swComp Is Nothing Then
+            ' Update external file references for this component
+            ' Parameters: Option (0=all configs), SearchFolder, UpdateOption (0=update)
+            On Error Resume Next
+            swComp.UpdateExternalFileReferences 0, SEARCH_FOLDER, 0
+            If Err.Number = 0 Then
+                updatedCount = updatedCount + 1
+            End If
+            On Error GoTo ErrorHandler
+        End If
+    Next i
+
+    LogMsg "    Updated: " & updatedCount & " components"
+
+    ' Force rebuild
+    swModelDoc.ForceRebuild3 False
+
+    ' Save if configured
+    If SAVE_AFTER_UPDATE Then
+        Dim saveResult As Long
+        saveResult = swModelDoc.Save3(1, errors, warnings)  ' 1 = swSaveAsCurrentVersion
+        If saveResult = 1 Then
+            LogMsg "    Saved successfully"
+        Else
+            LogMsg "    Warning: Save returned " & saveResult
+        End If
+    End If
+
+    CloseDoc False
+    UpdateAssemblyReferences = True
+    Exit Function
+
+ErrorHandler:
+    LogMsg "    ERROR: " & Err.Description
+    CloseDoc False
+    UpdateAssemblyReferences = False
+End Function
+
+Sub AddSearchFolder(folderPath As String)
+    ' Add folder to SolidWorks file search paths
+    On Error Resume Next
+
+    Dim currentPaths As String
+    currentPaths = swApp.GetSearchFolders(1)  ' 1 = swFileLocationsDocuments
+
+    ' Check if already in path
+    If InStr(1, currentPaths, folderPath, vbTextCompare) = 0 Then
+        If Len(currentPaths) > 0 Then
+            currentPaths = currentPaths & ";" & folderPath
+        Else
+            currentPaths = folderPath
+        End If
+        swApp.SetSearchFolders 1, currentPaths
+        LogMsg "Added search folder: " & folderPath
+    End If
+End Sub
+
+Sub CloseDoc(saveChanges As Boolean)
+    On Error Resume Next
+    If Not swModelDoc Is Nothing Then
+        If saveChanges Then
+            swModelDoc.Save3 1, 0, 0
+        End If
+        swApp.CloseDoc swModelDoc.GetTitle
+        Set swModelDoc = Nothing
+    End If
+End Sub
+
+Sub LogMsg(msg As String)
+    Debug.Print msg
+    If Not logStream Is Nothing Then
+        logStream.WriteLine msg
+    End If
+End Sub
